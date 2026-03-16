@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.log
+last_otp.txt
+.vscode/
+.pyre_configuration
+.DS_Store
+uploads/
