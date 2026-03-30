@@ -53,7 +53,8 @@ def init_db():
                 activityLevel VARCHAR(255),
                 experience VARCHAR(255),
                 focusArea VARCHAR(255),
-                frequency VARCHAR(255)
+                frequency VARCHAR(255),
+                dietaryPreference VARCHAR(255)
             )
         ''')
         
@@ -71,6 +72,10 @@ def init_db():
 
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP AFTER bio")
+        except: pass
+
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN dietaryPreference VARCHAR(255) AFTER frequency")
         except: pass
         
         # Create Yoga Poses table

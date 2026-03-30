@@ -5,7 +5,7 @@ from models.user_model import (
     add_user_progress, get_user_progress_history,
     get_user_stats, get_user_activity,
     store_otp, verify_otp, delete_otp,
-    reset_password_by_email
+    reset_password_by_email, generate_daily_plan
 )
 from db_config import get_db_connection
 from email_config import send_otp_email, send_password_reset_email
@@ -150,7 +150,8 @@ def register():
     if not user_id:
         return jsonify({"message": "Failed to create account"}), 500
     
-    # Clean up OTP
+    # Generate initial daily plan
+    generate_daily_plan(user_id)
 
     # Clean up OTP
     delete_otp(email)
@@ -305,6 +306,8 @@ def update_profile():
     try:
         success = update_user_profile(user_id, profile_data)
         if success:
+            # Regenerate daily plan whenever profile changes
+            generate_daily_plan(user_id)
             return jsonify({"message": "Profile updated and plan generated successfully"}), 200
         else:
             return jsonify({"message": "Database connection failed"}), 500

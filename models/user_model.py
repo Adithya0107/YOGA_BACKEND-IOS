@@ -41,10 +41,10 @@ def update_user_profile(user_id, profile_data):
         
         query = """
             UPDATE users 
-            SET name=%s, bio=%s, phone_number=%s,
-                age=%s, gender=%s, height=%s, weight=%s, 
-                goal=%s, activityLevel=%s, experience=%s, 
-                focusArea=%s, frequency=%s 
+            SET name=COALESCE(%s, name), bio=COALESCE(%s, bio), phone_number=COALESCE(%s, phone_number),
+                age=COALESCE(%s, age), gender=COALESCE(%s, gender), height=COALESCE(%s, height), weight=COALESCE(%s, weight), 
+                goal=COALESCE(%s, goal), activityLevel=COALESCE(%s, activityLevel), experience=COALESCE(%s, experience), 
+                focusArea=COALESCE(%s, focusArea), frequency=COALESCE(%s, frequency), dietaryPreference=COALESCE(%s, dietaryPreference) 
             WHERE id=%s
         """
         params = (
@@ -60,6 +60,7 @@ def update_user_profile(user_id, profile_data):
             profile_data.get('experience'),
             profile_data.get('focusArea'),
             profile_data.get('frequency'),
+            profile_data.get('dietaryPreference'),
             user_id
         )
         
@@ -77,10 +78,13 @@ def generate_daily_plan(user_id):
     if not conn: return
     try:
         cursor = conn.cursor(dictionary=True)
+        # Clear existing daily plans first to make it dynamic
+        cursor.execute("DELETE FROM daily_plans WHERE user_id = %s", (user_id,))
+        
         # Get user experience to filter poses
         cursor.execute("SELECT experience FROM users WHERE id = %s", (user_id,))
         user = cursor.fetchone()
-        exp = user['experience'].lower() if user else 'beginner'
+        exp = user['experience'].lower() if (user and user['experience']) else 'beginner'
         
         if exp == 'all':
             cursor.execute("SELECT id FROM yoga_poses ORDER BY RAND() LIMIT 5")
@@ -96,6 +100,7 @@ def generate_daily_plan(user_id):
             poses = cursor.fetchall()
             
         pose_ids = ",".join([str(p['id']) for p in poses])
+        # Generate for 7 days
         for day in range(1, 8):
             cursor.execute(
                 "INSERT INTO daily_plans (user_id, day_number, pose_ids) VALUES (%s, %s, %s)",
@@ -149,9 +154,30 @@ def change_user_password(user_id, new_password):
 
 def add_user_progress(user_id, progress_data):
     conn = get_db_connection()
-    if not conn: return
+    if not conn: return False
     try:
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
+        
+        # 1. Get current streak
+        stats = get_user_stats(user_id)
+        if not stats: return False
+        streak = int(stats.get('streak_days', 0))
+        
+        # 2. Get current shot count
+        cursor.execute("SELECT COUNT(*) as count FROM journey_shots WHERE user_id = %s", (user_id,))
+        count_res = cursor.fetchone()
+        shot_count = int(count_res['count'] if count_res else 0)
+        
+        # Requirement: For every 15 days of streak, 1 shot is allowed
+        # Max allowed shots = streak // 15
+        if streak < 15:
+            # First shot requires at least 15 days
+            return False
+        
+        if shot_count >= (streak // 15):
+            # Already uploaded shots for all available milestones
+            return False
+            
         query = """
             INSERT INTO journey_shots (user_id, weight, height, age, health_status, image_path)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -166,8 +192,10 @@ def add_user_progress(user_id, progress_data):
         )
         cursor.execute(query, params)
         conn.commit()
+        return True
     except Exception as e:
         print(f"Error adding progress: {e}")
+        return False
     finally:
         conn.close()
 
@@ -199,41 +227,85 @@ def get_user_stats(user_id):
         total_minutes = int(res['total_seconds'] or 0) // 60
         sessions = res['sessions'] or 0
         
-        # 2. Get current streak (unique days in the last 30 days)
+        # 2. Get current streak (consecutive days with 2-day grace)
         cursor.execute("""
-            SELECT COUNT(DISTINCT DATE(timestamp)) as streak_days 
+            SELECT DISTINCT DATE(timestamp) as practice_date 
             FROM session_summaries 
-            WHERE user_id = %s AND timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            WHERE user_id = %s 
+            ORDER BY practice_date DESC
         """, (user_id,))
-        streak_res = cursor.fetchone()
-        streak_days = streak_res['streak_days'] or 0
+        dates = cursor.fetchall()
         
-        # 3. Get BMI/Health from latest journey_shot
+        streak_days = 0
+        if dates:
+            from datetime import date
+            today = date.today()
+            last_practice = dates[0]['practice_date']
+            
+            # If gap between today and last practice >= 3 days, streak resets (reduced)
+            if (today - last_practice).days >= 3:
+                streak_days = 0
+            else:
+                # Count consecutive practice days where each gap is < 3 days
+                streak_days = 1
+                for i in range(1, len(dates)):
+                    gap = (dates[i-1]['practice_date'] - dates[i]['practice_date']).days
+                    if gap < 3:
+                        streak_days += 1
+                    else:
+                        break
+        
+        # Calculate level based on sessions (Dynamic leveling)
+        level = (sessions // 5) + 1
+        if level > 50: level = 50 # Cap level at 50
+        
+        # 3. Get BMI/Health from User Profile (Source of Truth)
         cursor.execute("""
-            SELECT weight, height, health_status FROM journey_shots 
-            WHERE user_id = %s ORDER BY timestamp DESC LIMIT 1
+            SELECT weight, height, age, goal FROM users WHERE id = %s
         """, (user_id,))
-        shot = cursor.fetchone()
+        user_prof = cursor.fetchone()
         
         bmi = 0.0
         health_status = "Normal"
-        if shot:
+        current_weight = 0
+        current_height = 0
+        current_age = 0
+
+        if user_prof:
             try:
-                w = float(shot['weight'])
-                h = float(shot['height']) / 100.0 # to meters
-                if h > 0:
-                    bmi = w / (h * h)
-                health_status = shot['health_status'] or "Normal"
+                current_weight = float(user_prof['weight'] or 0)
+                current_height = float(user_prof['height'] or 0)
+                current_age = int(user_prof['age'] or 0)
+                
+                h_meters = current_height / 100.0
+                if h_meters > 0:
+                    bmi = current_weight / (h_meters * h_meters)
             except: pass
+
+        # Get latest health_status from journey_shots as secondary
+        cursor.execute("""
+            SELECT health_status FROM journey_shots 
+            WHERE user_id = %s ORDER BY timestamp DESC LIMIT 1
+        """, (user_id,))
+        shot = cursor.fetchone()
+        if shot and shot['health_status']:
+            health_status = shot['health_status']
+        else:
+            # Fallback status based on BMI
+            if bmi > 0:
+                health_status = "Underweight" if bmi < 18.5 else "Normal" if bmi < 25 else "Overweight" if bmi < 30 else "Obese"
         
         return {
-            "level": 1, 
-            "streak_days": streak_days,
-            "total_minutes": total_minutes,
-            "sessions": sessions,
+            "level": level, 
+            "streak_days": int(streak_days),
+            "total_minutes": int(total_minutes),
+            "sessions": int(sessions),
             "bmi": round(bmi, 1),
             "health_status": health_status,
-            "recovery_rate": 80 
+            "recovery_rate": 80,
+            "weight": current_weight,
+            "height": current_height,
+            "age": current_age
         }
     except Exception as e:
         print(f"Error getting user stats: {e}")
@@ -246,16 +318,16 @@ def get_user_activity(user_id):
     if not conn: return []
     try:
         cursor = conn.cursor(dictionary=True)
-        # Return last 30 days of activity
+        # Return last 90 days of activity for calendar and graph
         cursor.execute("""
-            SELECT DATE_FORMAT(timestamp, '%Y-%m-%d') as date, 
-                   SUM(actual_duration) DIV 60 as minutes,
+            SELECT DATE_FORMAT(timestamp, '%%Y-%%m-%%d') as date, 
+                   COALESCE(SUM(actual_duration) DIV 60, 0) as minutes,
                    'done' as status
             FROM session_summaries 
             WHERE user_id = %s 
+              AND timestamp >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
             GROUP BY DATE(timestamp)
-            ORDER BY timestamp DESC
-            LIMIT 30
+            ORDER BY date DESC
         """, (user_id,))
         return cursor.fetchall()
     except Exception as e:

@@ -29,7 +29,7 @@ SENDER_NAME = "ZenForge Yoga"
 
 # When True, if SMTP fails the OTP is printed to console
 # and the function still returns True so the app flow isn't blocked.
-DEV_FALLBACK = True
+DEV_FALLBACK = False
 
 
 def _log_otp(to_email: str, otp: str, reason: str):
