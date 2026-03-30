@@ -480,15 +480,16 @@ def delete_account():
 
         # Delete in proper FK order: child tables first, then parent
         cursor.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
-        cursor.execute("DELETE FROM user_progress WHERE user_id = %s", (user_id,))
+        cursor.execute("DELETE FROM journey_shots WHERE user_id = %s", (user_id,))
         cursor.execute("DELETE FROM daily_plans WHERE user_id = %s", (user_id,))
+        cursor.execute("DELETE FROM session_summaries WHERE user_id = %s", (user_id,))
 
         # Delete OTPs by user email
         cursor.execute("SELECT email FROM users WHERE id = %s", (user_id,))
         user_row = cursor.fetchone()
         if user_row:
             email = user_row[0]
-            cursor.execute("DELETE FROM otps WHERE email = %s", (email,))
+            cursor.execute("DELETE FROM otp_verifications WHERE email = %s", (email,))
 
         # Finally delete the user
         cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
