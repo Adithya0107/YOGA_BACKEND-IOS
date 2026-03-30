@@ -25,6 +25,6 @@ def home():
     return {"message": "Yoga Backend is running"}
 
 if __name__ == "__main__":
-    print("Starting Flask server on http://0.0.0.0:5001...")
-    # Port 5001 to avoid AirPlay conflict on macOS
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    print("Starting Flask server on http://0.0.0.0:8003...")
+    # Update to port 8003 as provided by the user
+    app.run(debug=True, host='0.0.0.0', port=8003)
